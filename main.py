@@ -112,7 +112,17 @@ async def friend_dashboard():
         """
         
     html += """
-        <script>setTimeout(() => location.reload(), 2000);</script>
+        <script>
+    setInterval(() => {
+        const inputField = document.querySelector('input[name="reply"]');
+        
+        // If there is no input field (waiting for message), always reload.
+        // If there is an input field, ONLY reload if it's empty AND the user isn't clicked into it.
+        if (!inputField || (inputField.value.trim() === '' && document.activeElement !== inputField)) {
+            location.reload();
+        }
+    }, 2000);
+</script>
     </body>
     </html>
     """
