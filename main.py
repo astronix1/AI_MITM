@@ -3,14 +3,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 app = FastAPI()
 
-# A simple inbox to store the current conversation state
+# Inbox now stores the image as well
 inbox = {
     "current_prompt": None,
+    "current_image": None,
     "friend_reply": None
 }
 
 def reply_json(text):
-    """Helper to format the OpenAI JSON structure"""
     return {
         "choices": [{
             "message": {
@@ -24,27 +24,54 @@ def reply_json(text):
 async def ai_endpoint(request: Request):
     data = await request.json()
     
-    # Extract the user's prompt
+    # 1. Extract the user's text prompt
     user_text = "No text"
     if "messages" in data and len(data["messages"]) > 0:
-        user_text = data["messages"][-1].get("content", "").strip()
-        
-    # 1. If the user is just checking for an update
+        content = data["messages"][-1].get("content")
+        # Handle standard text or OpenAI's array format
+        if isinstance(content, str):
+            user_text = content.strip()
+        elif isinstance(content, list):
+            text_parts = [item["text"] for item in content if item.get("type") == "text"]
+            if text_parts:
+                user_text = " ".join(text_parts).strip()
+    
+    # 2. If you are just checking for an update
     if user_text.lower() in ["check", "update"]:
         if inbox["friend_reply"]:
             answer = inbox["friend_reply"]
-            # Clear the inbox after sending the answer
+            # Clear inbox after sending
             inbox["friend_reply"] = None 
             inbox["current_prompt"] = None
+            inbox["current_image"] = None
             return reply_json(answer)
         else:
             return reply_json("⏳ Your friend is still typing... Type 'check' again in a moment.")
             
-    # 2. Otherwise, it's a new prompt. Put it in the inbox.
+    # 3. Extract the image data
+    image_data = data.get("image", "")
+    
+    # Check if the app sent the image inside the standard OpenAI messages array instead
+    if not image_data and "messages" in data and len(data["messages"]) > 0:
+        content = data["messages"][-1].get("content")
+        if isinstance(content, list):
+            for item in content:
+                if item.get("type") == "image_url":
+                    image_data = item.get("image_url", {}).get("url", "")
+                    break
+
+    # Format the image correctly for the HTML <img> tag
+    if image_data == "{{IMAGE_BASE64}}" or not image_data:
+        image_data = None
+    elif not image_data.startswith("data:image"):
+        image_data = f"data:image/jpeg;base64,{image_data}"
+            
+    # 4. Save to inbox
     inbox["current_prompt"] = user_text
+    inbox["current_image"] = image_data
     inbox["friend_reply"] = None 
     
-    return reply_json("✅ Message delivered to your friend! Type 'check' when you want to see their reply.")
+    return reply_json("✅ Screenshot and message delivered! Type 'check' when you want to see their reply.")
 
 # --- The interface for your friend ---
 
@@ -57,17 +84,29 @@ async def friend_dashboard():
         <h2>Incoming Message</h2>
     """
     
-    if not inbox["current_prompt"]:
+    if not inbox["current_prompt"] and not inbox["current_image"]:
         html += "<p style='color: #666;'>No pending messages. Waiting...</p>"
     elif inbox["friend_reply"]:
         html += "<p style='color: green;'>Reply saved! Waiting for them to type 'check' in the app to receive it.</p>"
     else:
         html += f"""
-        <div style="background: white; border: 1px solid #ccc; padding: 15px; border-radius: 8px;">
+        <div style="background: white; border: 1px solid #ccc; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
             <p><strong>They said:</strong> {inbox['current_prompt']}</p>
+        """
+        
+        # Inject the image if it exists
+        if inbox["current_image"]:
+            html += f"""
+            <div style="margin-top: 15px; margin-bottom: 15px;">
+                <strong>Screenshot received:</strong><br>
+                <img src="{inbox['current_image']}" style="max-width: 100%; max-height: 500px; border: 1px solid #ddd; border-radius: 4px; margin-top: 5px;">
+            </div>
+            """
+            
+        html += """
             <form action="/answer" method="post" style="display: flex; gap: 10px; margin-top: 15px;">
-                <input type="text" name="reply" placeholder="Type your response..." style="flex-grow: 1; padding: 10px; border-radius: 4px;" required autocomplete="off"/>
-                <button type="submit" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px;">Save Reply</button>
+                <input type="text" name="reply" placeholder="Type your response..." style="flex-grow: 1; padding: 10px; border-radius: 4px; border: 1px solid #aaa;" required autocomplete="off"/>
+                <button type="submit" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">Save Reply</button>
             </form>
         </div>
         """
